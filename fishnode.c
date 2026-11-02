@@ -144,9 +144,12 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
    // Drop packet with invalid packet length
    if (len < sizeof(L3_Header)) {return 0;}
       
-      
    L3_Header *packet = l3frame;
    
+   if (packet->ttl > MAX_TTL) {
+      return 0;   // Drop this invalid packet. TTL is too big
+   }
+
    int l3frame_data_size = len - sizeof(L3_Header);
    uint8_t *l4frame = ((uint8_t *)l3frame) + sizeof(L3_Header);
 
@@ -171,7 +174,7 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
       
       L3_Header *forward_copy = (L3_Header *)smartalloc(len, "fishnode.c", __LINE__, 0);
       memcpy(forward_copy, packet, len);
-
+      
       if (forward_copy->ttl > 0) {
          forward_copy->ttl = forward_copy->ttl - 1;
       }
@@ -187,7 +190,7 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
    memcpy(forward_copy, packet, len);
    
    // forward packet. Decrement TTL
-   if (forward_copy->ttl > 0 && forward_copy->ttl <= MAX_TTL) {
+   if (forward_copy->ttl > 0) {
       forward_copy->ttl = forward_copy->ttl - 1;
    }
 
