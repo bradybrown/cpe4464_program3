@@ -123,10 +123,10 @@ void add_hist_entry(fnaddr_t src_l3, uint8_t *packet_id) {
 int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id) {
    Broadcast_History_Entry *current_node = broadcast_history_head;
 
-   int eq_id = 0;
+   int diff_ids = 1;
    while(current_node != NULL) {
-      eq_id = memcmp(current_node->packet_id, packet_id, 4);
-      if (current_node->src_l3 == src_l3 && eq_id) {
+      diff_ids = memcmp(current_node->packet_id, packet_id, 4);
+      if (current_node->src_l3 == src_l3 && diff_ids == 0) {
          // Returning 1 means that it does exist (caller should drop the packet)
          return 1; 
       }
@@ -187,7 +187,7 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
    memcpy(forward_copy, packet, len);
    
    // forward packet. Decrement TTL
-   if (forward_copy->ttl > 0) {
+   if (forward_copy->ttl > 0 && forward_copy->ttl <= MAX_TTL) {
       forward_copy->ttl = forward_copy->ttl - 1;
    }
 
@@ -370,7 +370,7 @@ int main(int argc, char **argv)
       }
    }
 
-   
+
    // Cleanup RiB
 
 
