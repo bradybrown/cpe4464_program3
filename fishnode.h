@@ -8,7 +8,7 @@
 #define DV_ROUTING_PROTOCOL 4
 
 
-typedef struct L2_Header {
+typedef struct __attribute__((packed)) L2_Header {
     fn_l2addr_t dest_l2;
     fn_l2addr_t src_l2;
     uint16_t checksum;

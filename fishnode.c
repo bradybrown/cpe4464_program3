@@ -203,12 +203,25 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
 int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr,
                uint8_t proto, uint8_t ttl)
 {
+   if (len < 0 || 
+       len > (MTU - sizeof(L3_Header) - sizeof(L2_Header))) {
+      return 0;   // Invalid l3 payload (l4 stuff) size 
+   }
    
+   L3_Header *l3frame = smartalloc(len + sizeof(L3_Header), "fishnode.c", __LINE__, 0);
    
+   if (ttl == 0 || ttl > MAX_TTL) {ttl = MAX_TTL;}
+   l3frame->ttl = ttl;
+   l3frame->l4_protocol = proto;
+   uint32_t pkt_id = htonl(fish_next_pktid());
+   memcpy(l3frame->packet_id, &pkt_id, 4);
+   l3frame->src_l3 = fish_getaddress();
+   l3frame->dest_l3 = dst_addr;
+   memcpy((uint8_t *)l3frame + sizeof(L3_Header), l4frame, len);
    
-   
-   
-   
+   fish_l3.fish_l3_forward(l3frame, len + sizeof(L3_Header)); 
+
+   smartfree(l3frame, "fishnode.c", __LINE__);
    return 0;
 }
 
