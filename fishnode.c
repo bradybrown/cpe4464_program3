@@ -319,7 +319,7 @@ int main(int argc, char **argv)
 
 #ifdef L3_IMPL
    fish_l3.fishnode_l3_receive = &my_fishnode_l3_receive;
-   // fish_l3.fish_l3_send = &my_fish_l3_send;
+   fish_l3.fish_l3_send = &my_fish_l3_send;
    // fish_l3.fish_l3_forward = &my_fish_l3_forward;
    // Set up a callback to broadcast DV advertisement
    // fish_scheduleevent(0, &my_timed_event, NULL);
@@ -345,7 +345,7 @@ int main(int argc, char **argv)
     * protocol to be enabled. */
    // fish_enable_lsarouting_builtin(0);
 
-#if 0
+#if 1
    /* Full-featured DV routing.  I suggest NOT using this until you have some
     * reasonable expectation that your code works.  This generates a lot of
     * routing traffic in fishnet */
