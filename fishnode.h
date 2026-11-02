@@ -1,0 +1,42 @@
+#ifndef __FISHNODE_H
+#define __FISHNODE_H
+
+#include <stdint.h>
+#include "fish.h"
+
+#define NEIGHBOR_PROTOCOL   3
+#define DV_ROUTING_PROTOCOL 4
+
+
+typedef struct L2_Header {
+    fn_l2addr_t dest_l2;
+    fn_l2addr_t src_l2;
+    uint16_t checksum;
+    uint16_t length;
+    uint8_t l3_protocol;
+} L2_Header; 
+
+
+typedef struct L3_Header {
+    uint8_t ttl;
+    uint8_t l4_protocol;
+    uint8_t packet_id[4];
+    fnaddr_t src_l3;
+    fnaddr_t dest_l3;
+} L3_Header; 
+
+
+typedef struct Broadcast_History_Entry {
+    fnaddr_t src_l3;
+    uint8_t packet_id[4];
+    struct Broadcast_History_Entry* next_entry;
+} Broadcast_History_Entry;
+
+
+int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id);
+void add_hist_entry(fnaddr_t *src_l3, uint8_t *packet_id);
+
+
+
+
+#endif

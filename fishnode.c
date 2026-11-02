@@ -1,4 +1,7 @@
 #include "fish.h"
+#include "fishnode.h"
+#include "smartalloc.h"
+
 #include <assert.h>
 #include <signal.h>
 #include <string.h>
@@ -6,6 +9,9 @@
 #define DEBUG
 
 #define L3_IMPL
+
+Broadcast_History_Entry *broadcast_history_head = NULL;
+
 
 static int noprompt = 0;
 
@@ -95,14 +101,111 @@ void my_resolve_fnaddr(fnaddr_t addr, arp_resolution_cb cb, void *param)
 #endif
 
 #ifdef L3_IMPL
-int my_fishnode_l3_receive(void *l3frame, int len)
+
+void add_hist_entry(fnaddr_t src_l3, uint8_t *packet_id) {
+   Broadcast_History_Entry *new_entry = (Broadcast_History_Entry *)smartalloc(sizeof(Broadcast_History_Entry), "fishnode.c", __LINE__, 0);
+   new_entry->src_l3 = src_l3;
+   memcpy(new_entry->packet_id, packet_id, 4);
+   new_entry->next_entry = NULL;
+
+   Broadcast_History_Entry *current_entry = broadcast_history_head;
+   if (current_entry == NULL) {
+      broadcast_history_head = new_entry;
+      return;
+   }
+
+   while (current_entry->next_entry != NULL) {
+      current_entry = current_entry->next_entry;
+   }
+   current_entry->next_entry = new_entry;
+}
+
+int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id) {
+   Broadcast_History_Entry *current_node = broadcast_history_head;
+
+   int eq_id = 0;
+   while(current_node != NULL) {
+      eq_id = memcmp(current_node->packet_id, packet_id, 4);
+      if (current_node->src_l3 == src_l3 && eq_id) {
+         // Returning 1 means that it does exist (caller should drop the packet)
+         return 1; 
+      }
+         
+      current_node = current_node->next_entry;
+   }
+   
+   // Returing 0 means that the packet is not in the table. Continue forwarding
+   return 0;
+}
+
+
+int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
 {
+   // Drop packet with invalid packet length
+   if (len < sizeof(L3_Header)) {return 0;}
+      
+      
+   L3_Header *packet = l3frame;
+   
+   int l3frame_data_size = len - sizeof(L3_Header);
+   uint8_t *l4frame = ((uint8_t *)l3frame) + sizeof(L3_Header);
+
+   if (packet->dest_l3 == fish_getaddress()) {
+      // Our node matches destination of packet. Send to l4
+      fish_l4.fish_l4_receive(l4frame, l3frame_data_size, packet->l4_protocol, packet->src_l3);
+      return 0;
+   }
+   
+   if (packet->dest_l3 == ALL_NEIGHBORS){  // This packet is a broadcast 
+      
+      if (check_bcast_hist(packet->src_l3, packet->packet_id)) {
+         // This node has already received the packet. DROP it with no FCMP msg
+         return 0;   
+      }
+         
+      // Pass up network stack and forward packet
+      fish_l4.fish_l4_receive(l4frame, l3frame_data_size,  packet->l4_protocol, packet->src_l3);
+
+      // Continue broadcasting packet: add to history, decrement ttl, forward 
+      add_hist_entry(packet->src_l3, packet->packet_id);
+      
+      L3_Header *forward_copy = (L3_Header *)smartalloc(len, "fishnode.c", __LINE__, 0);
+      memcpy(forward_copy, packet, len);
+
+      if (forward_copy->ttl > 0) {
+         forward_copy->ttl = forward_copy->ttl - 1;
+      }
+      
+      fish_l3.fish_l3_forward(forward_copy, len); 
+
+      smartfree(forward_copy, "fishnode.c", __LINE__);
+      return 0;
+   }
+
+   // Packet needs to be forwarded (not broadcast)
+   L3_Header *forward_copy = (L3_Header *)smartalloc(len, "fishnode.c", __LINE__, 0);
+   memcpy(forward_copy, packet, len);
+   
+   // forward packet. Decrement TTL
+   if (forward_copy->ttl > 0) {
+      forward_copy->ttl = forward_copy->ttl - 1;
+   }
+
+   fish_l3.fish_l3_forward(forward_copy, len); 
+
+   smartfree(forward_copy, "fishnode.c", __LINE__);
    return 0;
 }
 
 int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr,
                uint8_t proto, uint8_t ttl)
 {
+   
+   
+   
+   
+   
+   
    return 0;
 }
 
@@ -200,15 +303,15 @@ int main(int argc, char **argv)
 
 #ifdef L3_IMPL
    fish_l3.fishnode_l3_receive = &my_fishnode_l3_receive;
-   fish_l3.fish_l3_send = &my_fish_l3_send;
-   fish_l3.fish_l3_forward = &my_fish_l3_forward;
+   // fish_l3.fish_l3_send = &my_fish_l3_send;
+   // fish_l3.fish_l3_forward = &my_fish_l3_forward;
    // Set up a callback to broadcast DV advertisement
-   fish_scheduleevent(0, &my_timed_event, NULL);
+   // fish_scheduleevent(0, &my_timed_event, NULL);
    // Full functionality
-   fish_fwd.add_fwtable_entry = &my_add_fwtable_entry;
-   fish_fwd.remove_fwtable_entry = &my_remove_fwtable_entry;
-   fish_fwd.update_fwtable_metric = &my_update_fwtable_metric;
-   fish_fwd.longest_prefix_match = &my_longest_prefix_match;
+   // fish_fwd.add_fwtable_entry = &my_add_fwtable_entry;
+   // fish_fwd.remove_fwtable_entry = &my_remove_fwtable_entry;
+   // fish_fwd.update_fwtable_metric = &my_update_fwtable_metric;
+   // fish_fwd.longest_prefix_match = &my_longest_prefix_match;
 #endif
 
 #if 1
@@ -253,6 +356,30 @@ int main(int argc, char **argv)
    fishnet_cleanup();
 
    // Cleanup your data structures here
+   
+   // Cleanup Broadcast History list
+   if (broadcast_history_head != NULL) {
+      Broadcast_History_Entry *current_entry = broadcast_history_head->next_entry;
+      smartfree(broadcast_history_head, "fishnode.c", __LINE__);
+      broadcast_history_head = NULL;
+
+      while(current_entry != NULL) {
+         Broadcast_History_Entry *next_entry = current_entry->next_entry;
+         smartfree(current_entry, "fishnode.c", __LINE__);
+         current_entry = next_entry;
+      }
+   }
+
+   
+   // Cleanup RiB
+
+
+
+   // Cleanup FiB
+
+
+
+
 
 	return 0;
 }
