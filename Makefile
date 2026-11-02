@@ -36,7 +36,7 @@ test:
 
 GIVEN_FILES = fish.h libfish-Linux-x86_64.a smartalloc.c smartalloc.h fishnode.h
 handin: README
-	~bellardo/bin/rcvhandin bellardo p2 fishnode.c README Makefile $(GIVEN_FILES)
+	~bellardo/bin/rcvhandin bellardo p3 fishnode.c README Makefile $(GIVEN_FILES)
 
 clean:
 	rm -rf fishnode-* fishnode-*.dSYM
