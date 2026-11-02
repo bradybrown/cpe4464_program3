@@ -34,7 +34,7 @@ typedef struct Broadcast_History_Entry {
 
 
 int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id);
-void add_hist_entry(fnaddr_t *src_l3, uint8_t *packet_id);
+void add_hist_entry(fnaddr_t src_l3, uint8_t *packet_id);
 
 
 
