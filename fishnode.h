@@ -17,7 +17,7 @@ typedef struct L2_Header {
 } L2_Header; 
 
 
-typedef struct L3_Header {
+typedef struct __attribute__((packed)) L3_Header {
     uint8_t ttl;
     uint8_t l4_protocol;
     uint8_t packet_id[4];
