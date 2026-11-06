@@ -338,7 +338,33 @@ void* my_add_fwtable_entry(fnaddr_t dst, int prefix_length, fnaddr_t next_hop,
 
 void* my_remove_fwtable_entry(void *route_key)
 {
-   return NULL;
+   FiB_Entry *route_entry = route_key;
+   if (route_entry == NULL) {return NULL;}
+   if (fib_table_head == NULL) {return NULL;}
+   
+   if (fib_table_head == route_entry) {
+      fib_table_head = route_entry->next_entry;
+      
+      void *user_data = route_entry->user_data;
+      smartfree(route_entry, "fishnode.c", __LINE__);
+      return user_data;
+   }
+   
+   FiB_Entry *current_entry = fib_table_head;
+   while (current_entry != NULL) {
+      if (current_entry->next_entry == route_entry) {
+         FiB_Entry *tmp = route_entry->next_entry;
+         current_entry->next_entry = tmp;
+         
+         void *user_data = route_entry->user_data;
+         smartfree(route_entry, "fishnode.c", __LINE__);
+         return user_data;
+      }
+
+      current_entry = current_entry->next_entry;
+   }
+   
+   return NULL;   // Shoudln't get here
 }
 
 int my_update_fwtable_metric(void *route_key, int new_metric)
