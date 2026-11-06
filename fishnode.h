@@ -7,6 +7,11 @@
 #define NEIGHBOR_PROTOCOL   3
 #define DV_ROUTING_PROTOCOL 4
 
+#define TTL_EXCEEDED        1
+#define NETWORK_UNREACHABLE 2
+#define HOST_UNREACHABLE    3
+
+
 
 typedef struct __attribute__((packed)) L2_Header {
     fn_l2addr_t dest_l2;
@@ -31,6 +36,20 @@ typedef struct Broadcast_History_Entry {
     uint8_t packet_id[4];
     struct Broadcast_History_Entry* next_entry;
 } Broadcast_History_Entry;
+
+
+typedef struct __attribute__((packed)) FiB_Entry {
+    fnaddr_t dst;
+    uint32_t prefix_length;
+    uint32_t metric;
+
+} FiB_Entry; 
+
+
+typedef struct Callback_Data{
+   void *l3frame;
+   int len;
+} Callback_Data;
 
 
 int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id);

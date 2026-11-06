@@ -210,7 +210,7 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr,
    
    L3_Header *l3frame = smartalloc(len + sizeof(L3_Header), "fishnode.c", __LINE__, 0);
    
-   if (ttl == 0 || ttl > MAX_TTL) {ttl = MAX_TTL;}
+   if (ttl == 0 || ttl > MAX_TTL) {ttl = MAX_TTL;}    // Ensures ttl value is within our accepted range
    l3frame->ttl = ttl;
    l3frame->l4_protocol = proto;
    uint32_t pkt_id = htonl(fish_next_pktid());
@@ -225,8 +225,60 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr,
    return 0;
 }
 
+
+int l3_broadcast_forward_cb(void *callback_data, fnaddr_t dest, int prefix_len, 
+                         fnaddr_t next_hop, int metric, void *entry_data) {
+   Callback_Data *cb_data = callback_data;
+   L3_Header *l3frame = cb_data->l3frame;
+   
+   // Bcast means we dont care about prefixes or anything like that
+   fish_l2.fish_l2_send(l3frame, next_hop, cb_data->len, 1);
+   (void) dest;
+   (void) prefix_len;
+   (void) metric;
+   (void) entry_data;
+   return 0;
+}
+
 int my_fish_l3_forward(void *l3frame, int len)
 {
+   L3_Header *packet = l3frame;
+   
+   if (len <= sizeof(L3_Header)) {
+      return 0; // invalid packet size 
+   }
+
+   
+   // Check for invalid packet with its TTL
+   if (packet->ttl == 0 && packet->dest_l3 != fish_getaddress()) {
+      // generate FCMP TTL Exceeded error message and drop packet
+      fish_fcmp.send_fcmp_response(l3frame, len, TTL_EXCEEDED);
+      return 0;
+   }
+   
+   // Handle l3 bcast packet
+   if (packet->dest_l3 == ALL_NEIGHBORS) {
+      Callback_Data *cb_data = smartalloc(sizeof(Callback_Data), "fishnode.c", __LINE__, 0);
+      cb_data->l3frame = l3frame;
+      cb_data->len = len;
+      fish_fwd.iterate_entries(l3_broadcast_forward_cb, cb_data, FISH_FWD_TYPE_BROADCAST);
+      smartfree(cb_data, "fishnode.c", __LINE__);
+      return 0;
+   }
+
+
+   // Handle regular l3 packet
+   fnaddr_t next_hop = fish_fwd.longest_prefix_match(packet->dest_l3);
+
+   if (next_hop == 0) {
+      // Generate FCMP error & Drop frame
+      fish_fcmp.send_fcmp_response(l3frame, len, NETWORK_UNREACHABLE);
+      return 0;   
+   }
+   
+   // FiB has this node. forward to next hop addr
+   fish_l2.fish_l2_send(l3frame, next_hop, len, 1);   // L3 Protocol
+   
    return 0;
 }
 
@@ -320,7 +372,7 @@ int main(int argc, char **argv)
 #ifdef L3_IMPL
    fish_l3.fishnode_l3_receive = &my_fishnode_l3_receive;
    fish_l3.fish_l3_send = &my_fish_l3_send;
-   // fish_l3.fish_l3_forward = &my_fish_l3_forward;
+   fish_l3.fish_l3_forward = &my_fish_l3_forward;
    // Set up a callback to broadcast DV advertisement
    // fish_scheduleevent(0, &my_timed_event, NULL);
    // Full functionality
