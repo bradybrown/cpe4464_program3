@@ -38,12 +38,26 @@ typedef struct Broadcast_History_Entry {
 } Broadcast_History_Entry;
 
 
-typedef struct __attribute__((packed)) FiB_Entry {
+typedef struct FiB_Entry {
+    fnaddr_t dst;
+    uint32_t prefix_length;
+    fnaddr_t next_hop;
+    uint32_t metric;
+    char type;
+    void *user_data;
+
+    struct FiB_Entry *next_entry;
+} FiB_Entry; 
+
+
+typedef struct RiB_Entry {
     fnaddr_t dst;
     uint32_t prefix_length;
     uint32_t metric;
+    uint32_t cost;
 
-} FiB_Entry; 
+    struct RiB_Entry *next_entry;
+} RiB_Entry;
 
 
 typedef struct Callback_Data{

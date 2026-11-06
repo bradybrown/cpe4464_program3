@@ -11,6 +11,7 @@
 #define L3_IMPL
 
 Broadcast_History_Entry *broadcast_history_head = NULL;
+FiB_Entry *fib_table_head = NULL;
 
 
 static int noprompt = 0;
@@ -248,7 +249,6 @@ int my_fish_l3_forward(void *l3frame, int len)
       return 0; // invalid packet size 
    }
 
-   
    // Check for invalid packet with its TTL
    if (packet->ttl == 0 && packet->dest_l3 != fish_getaddress()) {
       // generate FCMP TTL Exceeded error message and drop packet
@@ -291,7 +291,49 @@ void my_timed_event(void*)
 void* my_add_fwtable_entry(fnaddr_t dst, int prefix_length, fnaddr_t next_hop,
                    int metric, char type, void *user_data)
 {
-   return NULL;
+   if (prefix_length < 0 || prefix_length > 32) {
+      return NULL;   // Invalid prefix
+   }
+
+   if (metric < 0) {
+      return NULL;   // Invalid metric
+   }
+   
+   FiB_Entry *new_entry = smartalloc(sizeof(FiB_Entry), "fishnode.c", __LINE__, 0);
+   new_entry->dst = dst;
+   new_entry->prefix_length = prefix_length;
+   new_entry->next_hop = next_hop;
+   new_entry->metric = metric;
+   new_entry->type = type;
+   new_entry->user_data = user_data;
+   new_entry->next_entry = NULL;
+
+   // Group routes with same destination. Otherwise, append at end
+   if (fib_table_head == NULL) {
+      fib_table_head = new_entry;
+      return new_entry;
+   }
+   
+   FiB_Entry *current_entry = fib_table_head;
+   while (current_entry != NULL) {
+      // Found same destination, insert here
+      if (current_entry->dst == dst) {
+         FiB_Entry *tmp = current_entry->next_entry;
+         current_entry->next_entry = new_entry;
+         new_entry->next_entry = tmp;
+         return new_entry;
+      }
+
+      if (current_entry->next_entry == NULL) {
+         current_entry->next_entry = new_entry;
+         return new_entry;   // End of list, place the new entry here
+      }
+
+      current_entry = current_entry->next_entry;
+   }
+   
+   // Shouldn't get here
+   return new_entry;
 }
 
 void* my_remove_fwtable_entry(void *route_key)
@@ -444,7 +486,17 @@ int main(int argc, char **argv)
 
 
    // Cleanup FiB
+   if (fib_table_head != NULL) {
+      FiB_Entry *current_entry = fib_table_head->next_entry;
+      smartfree(fib_table_head, "fishnode.c", __LINE__);
+      fib_table_head = NULL;
 
+      while(current_entry != NULL) {
+         FiB_Entry *next_entry = current_entry->next_entry;
+         smartfree(current_entry, "fishnode.c", __LINE__);
+         current_entry = next_entry;
+      }
+   }
 
 
 
