@@ -285,6 +285,7 @@ int my_fish_l3_forward(void *l3frame, int len)
 // Callback to broadcast DV advertisement
 void my_timed_event(void*)
 {
+   
 }
 
 // Full functionality
@@ -517,7 +518,7 @@ int main(int argc, char **argv)
    fish_fwd.longest_prefix_match = &my_longest_prefix_match;
 #endif
 
-#if 0
+#if 1
    /* Enable the built-in neighbor protocol implementation.  This will discover
     * one-hop routes in your fishnet.  The link-state routing protocol requires
     * the neighbor protocol to be working, whereas it is redundant with DV.
@@ -532,7 +533,7 @@ int main(int argc, char **argv)
     * protocol to be enabled. */
    // fish_enable_lsarouting_builtin(0);
 
-#if 1
+#if 0
    /* Full-featured DV routing.  I suggest NOT using this until you have some
     * reasonable expectation that your code works.  This generates a lot of
     * routing traffic in fishnet */

@@ -56,6 +56,18 @@ typedef struct Callback_Data{
 } Callback_Data;
 
 
+typedef struct DV_Routing_Packet {
+    fnaddr_t l3_addr;
+    uint16_t num_ads;
+} DV_Routing_Packet;
+
+typedef struct DV_Ad_Packet {
+    fnaddr_t dest;
+    uint32_t netmask;
+    uint32_t metric;
+} DV_Routing_Packet;
+
+
 int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id);
 void add_hist_entry(fnaddr_t src_l3, uint8_t *packet_id);
 
