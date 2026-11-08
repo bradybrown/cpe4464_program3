@@ -50,16 +50,6 @@ typedef struct FiB_Entry {
 } FiB_Entry; 
 
 
-typedef struct RiB_Entry {
-    fnaddr_t dst;
-    uint32_t prefix_length;
-    uint32_t metric;
-    uint32_t cost;
-
-    struct RiB_Entry *next_entry;
-} RiB_Entry;
-
-
 typedef struct Callback_Data{
    void *l3frame;
    int len;
@@ -68,6 +58,8 @@ typedef struct Callback_Data{
 
 int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id);
 void add_hist_entry(fnaddr_t src_l3, uint8_t *packet_id);
+
+int is_fib_match(FiB_Entry *entry, fnaddr_t addr);
 
 
 

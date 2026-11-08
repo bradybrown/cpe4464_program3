@@ -369,12 +369,72 @@ void* my_remove_fwtable_entry(void *route_key)
 
 int my_update_fwtable_metric(void *route_key, int new_metric)
 {
+   FiB_Entry *entry = route_key;
+   if (entry != NULL) {
+      entry->metric = new_metric;
+      return 1;   // Returns True for success
+   }
+   
    return 0;
 }
 
+int is_fib_match(FiB_Entry *entry, fnaddr_t addr) {
+   // First check if the exact IP is the same  /32
+   if (entry->dst == addr) {return 1;}
+
+   // Check CIDR Mask
+   fnaddr_t host_entryDst = ntohl(entry->dst);
+   fnaddr_t host_addr = ntohl(addr);
+
+   uint32_t prefix_len = entry->prefix_length;
+   fnaddr_t cidr_mask = 0;
+
+   if (prefix_len > 31) {return 0;}
+   for (u_int8_t i = 0; i < prefix_len; i++) {
+      cidr_mask |= (i << (31-i));
+   }
+
+   return ((host_addr & cidr_mask) == (host_entryDst & cidr_mask));
+}
+
+
 fnaddr_t my_longest_prefix_match(fnaddr_t addr)
 {
-   return 0;
+   // All same destinations are grouped in the add entry function
+   // Just have to find the destination and keep interating until we have checked all of the prefixes
+   
+
+   // If FiB is empty, this function returns 0
+   if (fib_table_head == NULL) {
+      return 0;
+   }
+
+   FiB_Entry *match = NULL;
+   uint32_t best_prefix = 0;
+   FiB_Entry *current_entry = fib_table_head;
+   while (current_entry->next_entry != NULL) {
+      if (is_fib_match(current_entry, addr)) {
+         if (match == NULL || best_prefix < current_entry->prefix_length) {
+            match = current_entry;
+            best_prefix = current_entry->prefix_length;
+         }   
+      }
+
+
+      current_entry = current_entry->next_entry;
+   }
+
+   if (current_entry->dst == addr) {
+      if (match == NULL || best_prefix < current_entry->prefix_length) {
+         match = current_entry;
+         best_prefix = current_entry->prefix_length;
+      }   
+   }
+   
+   if (match == NULL) {
+      return 0;
+   }
+   return match->next_hop;
 }
 #endif
 
@@ -444,10 +504,10 @@ int main(int argc, char **argv)
    // Set up a callback to broadcast DV advertisement
    // fish_scheduleevent(0, &my_timed_event, NULL);
    // Full functionality
-   // fish_fwd.add_fwtable_entry = &my_add_fwtable_entry;
-   // fish_fwd.remove_fwtable_entry = &my_remove_fwtable_entry;
-   // fish_fwd.update_fwtable_metric = &my_update_fwtable_metric;
-   // fish_fwd.longest_prefix_match = &my_longest_prefix_match;
+   fish_fwd.add_fwtable_entry = &my_add_fwtable_entry;
+   fish_fwd.remove_fwtable_entry = &my_remove_fwtable_entry;
+   fish_fwd.update_fwtable_metric = &my_update_fwtable_metric;
+   fish_fwd.longest_prefix_match = &my_longest_prefix_match;
 #endif
 
 #if 1
