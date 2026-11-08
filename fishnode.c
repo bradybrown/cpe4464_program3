@@ -379,9 +379,6 @@ int my_update_fwtable_metric(void *route_key, int new_metric)
 }
 
 int is_fib_match(FiB_Entry *entry, fnaddr_t addr) {
-   // First check if the exact IP is the same  /32
-   if (entry->dst == addr) {return 1;}
-
    // Check CIDR Mask
    fnaddr_t host_entryDst = ntohl(entry->dst);
    fnaddr_t host_addr = ntohl(addr);
@@ -389,9 +386,9 @@ int is_fib_match(FiB_Entry *entry, fnaddr_t addr) {
    uint32_t prefix_len = entry->prefix_length;
    fnaddr_t cidr_mask = 0;
 
-   if (prefix_len > 31) {return 0;}
-   for (u_int8_t i = 0; i < prefix_len; i++) {
-      cidr_mask |= (i << (31-i));
+   if (prefix_len > 32) {return 0;}
+   for (uint8_t i = 0; i < prefix_len; i++) {
+      cidr_mask |= (1U << (31-i));
    }
 
    return ((host_addr & cidr_mask) == (host_entryDst & cidr_mask));
@@ -414,7 +411,12 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr)
    FiB_Entry *current_entry = fib_table_head;
    while (current_entry->next_entry != NULL) {
       if (is_fib_match(current_entry, addr)) {
-         if (match == NULL || best_prefix < current_entry->prefix_length) {
+         if (match == NULL || current_entry->prefix_length > best_prefix) {
+            match = current_entry;
+            best_prefix = current_entry->prefix_length;
+         } 
+         else if (current_entry->prefix_length == best_prefix && 
+                  current_entry->metric < match->metric) {
             match = current_entry;
             best_prefix = current_entry->prefix_length;
          }   
@@ -424,11 +426,16 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr)
       current_entry = current_entry->next_entry;
    }
 
-   if (current_entry->dst == addr) {
-      if (match == NULL || best_prefix < current_entry->prefix_length) {
+   if (is_fib_match(current_entry, addr)) {
+      if (match == NULL || current_entry->prefix_length > best_prefix) {
          match = current_entry;
          best_prefix = current_entry->prefix_length;
-      }   
+      } 
+      else if (current_entry->prefix_length == best_prefix && 
+               current_entry->metric < match->metric) {
+            match = current_entry;
+            best_prefix = current_entry->prefix_length;
+      } 
    }
    
    if (match == NULL) {
@@ -510,7 +517,7 @@ int main(int argc, char **argv)
    fish_fwd.longest_prefix_match = &my_longest_prefix_match;
 #endif
 
-#if 1
+#if 0
    /* Enable the built-in neighbor protocol implementation.  This will discover
     * one-hop routes in your fishnet.  The link-state routing protocol requires
     * the neighbor protocol to be working, whereas it is redundant with DV.
@@ -551,7 +558,6 @@ int main(int argc, char **argv)
 
    fishnet_cleanup();
 
-   // Cleanup your data structures here
    
    // Cleanup Broadcast History list
    if (broadcast_history_head != NULL) {
@@ -567,10 +573,6 @@ int main(int argc, char **argv)
    }
 
 
-   // Cleanup RiB
-
-
-
    // Cleanup FiB
    if (fib_table_head != NULL) {
       FiB_Entry *current_entry = fib_table_head->next_entry;
@@ -583,8 +585,6 @@ int main(int argc, char **argv)
          current_entry = next_entry;
       }
    }
-
-
 
 
 	return 0;
