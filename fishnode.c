@@ -403,9 +403,8 @@ void my_timed_event(void*)
    header->num_ads = htons(dv_cb_data.ads_added);
    int actual_len = sizeof(DV_Ad_Header) + (dv_cb_data.ads_added * sizeof(DV_Ad_Route));
 
-
    fish_l2.fish_l2_send(dv_packet, ALL_NEIGHBORS, actual_len, DV_ROUTING_PROTOCOL);
-   smartfree(dv_packet, "fishnode.c", __LINE__);
+   // Dont need to free the dv_packet memory since its handled in the ARP/L2 layer
 
    // Repeat every 30 seconds
    fish_scheduleevent(30000, my_timed_event, NULL);
@@ -668,7 +667,7 @@ int main(int argc, char **argv)
    fish_l3.fish_l3_send = &my_fish_l3_send;
    fish_l3.fish_l3_forward = &my_fish_l3_forward;
    // Set up a callback to broadcast DV advertisement
-   // fish_scheduleevent(0, &my_timed_event, NULL);
+   fish_scheduleevent(0, &my_timed_event, NULL);
    // Full functionality
    fish_fwd.add_fwtable_entry = &my_add_fwtable_entry;
    fish_fwd.remove_fwtable_entry = &my_remove_fwtable_entry;
