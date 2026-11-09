@@ -139,14 +139,88 @@ int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id) {
    return 0;
 }
 
+/* Returns the first entry in the FiB of the group that 
+   matches the destination l3 addr */
+FiB_Entry *check_fib(fnaddr_t dst) {
+   FiB_Entry *current_entry = fib_table_head;
+
+   if (current_entry == NULL) {return NULL;}
+
+   while (current_entry != NULL) {
+      if (current_entry->dst == dst) {return current_entry;}
+
+      current_entry = current_entry->next_entry;
+   }
+
+   return NULL;
+}
+
+int dv_recieve(void *l3frame, int len) {
+   DV_Ad_Header *dv_packet = l3frame;
+   if (dv_packet->num_ads == 0) {return 0;}  // No ads => nothing to do
+
+   // Check if the len is enough for the size of the packet
+   uint32_t num_ad_route_bytes = ntohs(dv_packet->num_ads) * sizeof(DV_Ad_Route);
+   if (len < (sizeof(DV_Ad_Header) + num_ad_route_bytes)) {
+      return 0;
+   }
+
+   fnaddr_t src = dv_packet->l3_addr; 
+   DV_Ad_Route *current_route;
+   uint8_t *start_ads =  ((uint8_t *)l3frame) + sizeof(DV_Ad_Header);
+   for (uint32_t i = 0; i < ntohs(dv_packet->num_ads); i++) {
+      current_route = start_ads + (i * num_ad_route_bytes);
+
+      // Per route, check if we need to update FiB
+      if (current_route->metric >= MAX_TTL) {continue;}
+      
+      FiB_Entry *fib_entry = check_fib(current_route->dest);
+      if (fib_entry == NULL) {
+         int prefix_length = ;
+         fish_fwd.add_fwtable_entry(current_route->dest, 
+                                    current_route->netmask, 
+                                    src, 
+                                    current_route->metric + 1, 
+                                    FISH_FWD_TYPE_DV, 
+                                    NULL);
+         continue;
+      }
+
+      /* When checking if i should replace an entry, I need to check:
+
+      - Next hop is the same: if new is higher, REPLACE (something happened in 
+         the network such that it now takes longer to get to dest). Else, 
+         DONT change current entry  
+      
+      - NH is diff: If new is lower, then this is an alternative route that is 
+         better than current (REPLACE old entry). Else, DONT change since our
+         old entry is a better option.
+      
+      
+      */       
+
+
+   }
+
+   return 0;
+}
 
 int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
 {
+   // Separate DV ad handling
+   if (protocol == DV_ROUTING_PROTOCOL) {
+      dv_receive(l3frame, len);
+
+      return 0;
+   }
+
+   
+   // Handle regular L3 Packet
+   
    // Drop packet with invalid packet length
    if (len < sizeof(L3_Header)) {return 0;}
-      
-   L3_Header *packet = l3frame;
    
+   L3_Header *packet = l3frame;
    if (packet->ttl > MAX_TTL) {
       return 0;   // Drop this invalid packet. TTL is too big
    }
@@ -379,7 +453,7 @@ int my_update_fwtable_metric(void *route_key, int new_metric)
    return 0;
 }
 
-int is_fib_match(FiB_Entry *entry, fnaddr_t addr) {
+int is_entry_cidr_match(FiB_Entry *entry, fnaddr_t addr) {
    // Check CIDR Mask
    fnaddr_t host_entryDst = ntohl(entry->dst);
    fnaddr_t host_addr = ntohl(addr);
@@ -411,7 +485,7 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr)
    uint32_t best_prefix = 0;
    FiB_Entry *current_entry = fib_table_head;
    while (current_entry->next_entry != NULL) {
-      if (is_fib_match(current_entry, addr)) {
+      if (is_entry_cidr_match(current_entry, addr)) {
          if (match == NULL || current_entry->prefix_length > best_prefix) {
             match = current_entry;
             best_prefix = current_entry->prefix_length;
@@ -427,7 +501,7 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr)
       current_entry = current_entry->next_entry;
    }
 
-   if (is_fib_match(current_entry, addr)) {
+   if (is_entry_cidr_match(current_entry, addr)) {
       if (match == NULL || current_entry->prefix_length > best_prefix) {
          match = current_entry;
          best_prefix = current_entry->prefix_length;

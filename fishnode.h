@@ -56,23 +56,26 @@ typedef struct Callback_Data{
 } Callback_Data;
 
 
-typedef struct DV_Routing_Packet {
+typedef struct __attribute__((packed)) DV_Ad_Header {
     fnaddr_t l3_addr;
     uint16_t num_ads;
-} DV_Routing_Packet;
+} DV_Ad_Header;
 
-typedef struct DV_Ad_Packet {
+typedef struct __attribute__((packed)) DV_Ad_Route {
     fnaddr_t dest;
     uint32_t netmask;
     uint32_t metric;
-} DV_Routing_Packet;
+} DV_Ad_Route;
 
 
 int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id);
 void add_hist_entry(fnaddr_t src_l3, uint8_t *packet_id);
 
-int is_fib_match(FiB_Entry *entry, fnaddr_t addr);
+// Full Functionality
+int is_entry_cidr_match(FiB_Entry *entry, fnaddr_t addr);
 
+int dv_recieve(void *l3frame, int len);
+FiB_Entry * check_fib(fnaddr_t dst);
 
 
 
