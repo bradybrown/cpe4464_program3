@@ -155,7 +155,16 @@ FiB_Entry *check_fib(fnaddr_t dst) {
    return NULL;
 }
 
-int dv_recieve(void *l3frame, int len) {
+int netmask_to_slash(uint32_t netmask) {
+   int prefix_len = 0;
+   for (int i = 0U; i < 32U; i++) {
+      if (netmask & (1 << (31U - i))) 
+         prefix_len++;
+   }
+   return prefix_len;
+}
+
+int dv_receive(void *l3frame, int len) {
    DV_Ad_Header *dv_packet = l3frame;
    if (dv_packet->num_ads == 0) {return 0;}  // No ads => nothing to do
 
@@ -169,16 +178,16 @@ int dv_recieve(void *l3frame, int len) {
    DV_Ad_Route *current_route;
    uint8_t *start_ads =  ((uint8_t *)l3frame) + sizeof(DV_Ad_Header);
    for (uint32_t i = 0; i < ntohs(dv_packet->num_ads); i++) {
-      current_route = start_ads + (i * num_ad_route_bytes);
+      current_route = (DV_Ad_Route *)(start_ads + (i * sizeof(DV_Ad_Route)));
 
       // Per route, check if we need to update FiB
       if (current_route->metric >= MAX_TTL) {continue;}
       
       FiB_Entry *fib_entry = check_fib(current_route->dest);
       if (fib_entry == NULL) {
-         int prefix_length = ;
+         int prefix_length = netmask_to_slash(current_route->netmask);
          fish_fwd.add_fwtable_entry(current_route->dest, 
-                                    current_route->netmask, 
+                                    prefix_length, 
                                     src, 
                                     current_route->metric + 1, 
                                     FISH_FWD_TYPE_DV, 
@@ -195,10 +204,23 @@ int dv_recieve(void *l3frame, int len) {
       - NH is diff: If new is lower, then this is an alternative route that is 
          better than current (REPLACE old entry). Else, DONT change since our
          old entry is a better option.
-      
-      
       */       
+      while (fib_entry->dst == current_route->dest) {
+         if (fib_entry->type == FISH_FWD_TYPE_DV) {
+            if (fib_entry->next_hop == src && 
+               (current_route->metric + 1) > fib_entry->metric) {
+               
+               fish_fwd.update_fwtable_metric(fib_entry, current_route->metric + 1);
+            }
+            else if (fib_entry->next_hop != src &&
+               (current_route->metric + 1) < fib_entry->metric) {
+               
+               fish_fwd.update_fwtable_metric(fib_entry, current_route->metric + 1);
+            }
 
+         }
+         fib_entry = fib_entry->next_entry;
+      }
 
    }
 
@@ -303,7 +325,7 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr,
 
 int l3_broadcast_forward_cb(void *callback_data, fnaddr_t dest, int prefix_len, 
                          fnaddr_t next_hop, int metric, void *entry_data) {
-   Callback_Data *cb_data = callback_data;
+   FWD_Callback_Data *cb_data = callback_data;
    L3_Header *l3frame = cb_data->l3frame;
    
    // Bcast means we dont care about prefixes or anything like that
@@ -332,7 +354,7 @@ int my_fish_l3_forward(void *l3frame, int len)
    
    // Handle l3 bcast packet
    if (packet->dest_l3 == ALL_NEIGHBORS) {
-      Callback_Data *cb_data = smartalloc(sizeof(Callback_Data), "fishnode.c", __LINE__, 0);
+      FWD_Callback_Data *cb_data = smartalloc(sizeof(FWD_Callback_Data), "fishnode.c", __LINE__, 0);
       cb_data->l3frame = l3frame;
       cb_data->len = len;
       fish_fwd.iterate_entries(l3_broadcast_forward_cb, cb_data, FISH_FWD_TYPE_BROADCAST);
@@ -359,7 +381,69 @@ int my_fish_l3_forward(void *l3frame, int len)
 // Callback to broadcast DV advertisement
 void my_timed_event(void*)
 {
+   int max_dv_payload = MTU - 17;   // MTU - L2 Header
+
+   uint16_t max_ads = (max_dv_payload - sizeof(DV_Ad_Header)) / sizeof(DV_Ad_Route);
+   int packet_len = sizeof(DV_Ad_Header) + (max_ads * sizeof(DV_Ad_Route));
+
+
+   uint8_t *dv_packet = smartalloc(packet_len, "fishnode.c", __LINE__, 0);
+   DV_Ad_Header *header = (DV_Ad_Header *)dv_packet;
+   header->l3_addr = fish_getaddress();
+   header->num_ads = 0;
+
+   // Add to the dv packet with as many entries from FiB as we can fit 
+   DV_Callback_Data dv_cb_data;
+   dv_cb_data.packet = dv_packet;
+   dv_cb_data.max_ads = max_ads;
+   dv_cb_data.ads_added = 0;
+   fish_fwd.iterate_entries(dv_ad_cb, &dv_cb_data, FISH_FWD_TYPE_DV);
    
+   // After it returns, we should have the num ads added
+   header->num_ads = htons(dv_cb_data.ads_added);
+   int actual_len = sizeof(DV_Ad_Header) + (dv_cb_data.ads_added * sizeof(DV_Ad_Route));
+
+
+   fish_l2.fish_l2_send(dv_packet, ALL_NEIGHBORS, actual_len, DV_ROUTING_PROTOCOL);
+   smartfree(dv_packet, "fishnode.c", __LINE__);
+
+   // Repeat every 30 seconds
+   fish_scheduleevent(30000, my_timed_event, NULL);
+}
+
+/* 
+   This adds the current entry from the FiB to the DV ad packet in the 
+   route section. It follows the structure of the "fwtable_iterator_cb"
+*/
+int dv_ad_cb(void *callback_data, fnaddr_t dest, 
+            int prefix_len, fnaddr_t next_hop, int metric, void *entry_data) {
+   DV_Callback_Data *dv_build_context = callback_data;
+
+   // Even if there are more entries in the FiB, we won't send them all since the MTU 
+   if (dv_build_context->ads_added >= dv_build_context->max_ads) {
+      return 0;
+   }
+
+   // Ptr to start of the routes in the DV Packet
+   DV_Ad_Route *routes = (DV_Ad_Route *)(dv_build_context->packet + sizeof(DV_Ad_Header));
+
+   // Gets the index for the route we are adding from FiB to this DV Packet
+   DV_Ad_Route *current_route = &routes[dv_build_context->ads_added];
+   current_route->dest = dest;
+   current_route->metric = htonl(metric);
+
+   
+   uint32_t host_mask = 0;
+   if (prefix_len != 0) {
+      host_mask = 0xFFFFFFFFu << (32 - prefix_len);
+   }
+   current_route->netmask = htonl(host_mask);
+
+   dv_build_context->ads_added++;
+
+   (void) next_hop;
+   (void) entry_data;
+   return 0; 
 }
 
 // Full functionality

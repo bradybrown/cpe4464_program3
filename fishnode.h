@@ -50,10 +50,10 @@ typedef struct FiB_Entry {
 } FiB_Entry; 
 
 
-typedef struct Callback_Data{
+typedef struct FWD_Callback_Data{
    void *l3frame;
    int len;
-} Callback_Data;
+} FWD_Callback_Data;
 
 
 typedef struct __attribute__((packed)) DV_Ad_Header {
@@ -63,9 +63,16 @@ typedef struct __attribute__((packed)) DV_Ad_Header {
 
 typedef struct __attribute__((packed)) DV_Ad_Route {
     fnaddr_t dest;
-    uint32_t netmask;
+    fnaddr_t netmask;
     uint32_t metric;
 } DV_Ad_Route;
+
+typedef struct DV_Callback_Data {
+    uint8_t *packet;
+    uint16_t max_ads;
+    uint16_t ads_added;
+} DV_Callback_Data;
+
 
 
 int check_bcast_hist(fnaddr_t src_l3, uint8_t *packet_id);
@@ -74,9 +81,11 @@ void add_hist_entry(fnaddr_t src_l3, uint8_t *packet_id);
 // Full Functionality
 int is_entry_cidr_match(FiB_Entry *entry, fnaddr_t addr);
 
-int dv_recieve(void *l3frame, int len);
+int dv_receive(void *l3frame, int len);
 FiB_Entry * check_fib(fnaddr_t dst);
+int netmask_to_slash(uint32_t netmask);
 
-
+int dv_ad_cb(void *callback_data, fnaddr_t dest, int prefix_len, 
+            fnaddr_t next_hop, int metric, void *entry_data);
 
 #endif
