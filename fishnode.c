@@ -427,6 +427,25 @@ void my_timed_event(void*)
    fish_scheduleevent(30000, my_timed_event, NULL);
 }
 
+void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param,
+            char type) 
+{
+   if (fib_table_head == NULL) {
+      return;
+   }
+
+   FiB_Entry *current_entry = fib_table_head;
+   while (current_entry != NULL) {
+      if (current_entry->type == type) {     
+         callback(callback_param, current_entry->dst, 
+            current_entry->prefix_length, current_entry->next_hop,
+            current_entry->metric, current_entry->user_data);
+      }
+
+      current_entry = current_entry->next_entry;
+   }
+}
+
 /* 
    This adds the current entry from the FiB to the DV ad packet in the 
    route section. It follows the structure of the "fwtable_iterator_cb"
@@ -539,7 +558,7 @@ void* my_remove_fwtable_entry(void *route_key)
       current_entry = current_entry->next_entry;
    }
    
-   return NULL;   // Shoudln't get here
+   return NULL;   // Shouldn't get here
 }
 
 int my_update_fwtable_metric(void *route_key, int new_metric)
@@ -690,6 +709,7 @@ int main(int argc, char **argv)
    fish_fwd.remove_fwtable_entry = &my_remove_fwtable_entry;
    fish_fwd.update_fwtable_metric = &my_update_fwtable_metric;
    fish_fwd.longest_prefix_match = &my_longest_prefix_match;
+   fish_fwd.iterate_entries = &my_iterate_entries;
 #endif
 
 #if 1

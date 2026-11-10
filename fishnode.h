@@ -80,12 +80,12 @@ void add_hist_entry(fnaddr_t src_l3, uint8_t *packet_id);
 
 // Full Functionality
 int is_entry_cidr_match(FiB_Entry *entry, fnaddr_t addr);
-
 int dv_receive(void *l3frame, int len);
 FiB_Entry * check_fib(fnaddr_t dst);
 int netmask_to_slash(uint32_t netmask);
-
 int dv_ad_cb(void *callback_data, fnaddr_t dest, int prefix_len, 
             fnaddr_t next_hop, int metric, void *entry_data);
+void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param,
+            char type);
 
 #endif
