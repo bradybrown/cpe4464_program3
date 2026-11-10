@@ -165,6 +165,11 @@ int netmask_to_slash(uint32_t netmask) {
 }
 
 int dv_receive(void *l3frame, int len) {
+   if (len < (int)sizeof(DV_Ad_Header)) {
+      return 0;
+   }
+
+   DV_Ad_Header *dv_packet = l3frame;
    DV_Ad_Header *dv_packet = l3frame;
    if (dv_packet->num_ads == 0) {return 0;}  // No ads => nothing to do
 
@@ -205,7 +210,7 @@ int dv_receive(void *l3frame, int len) {
          better than current (REPLACE old entry). Else, DONT change since our
          old entry is a better option.
       */       
-      while (fib_entry->dst == current_route->dest) {
+      while (fib_entry != NULL && fib_entry->dst == current_route->dest) {
          if (fib_entry->type == FISH_FWD_TYPE_DV) {
             if (fib_entry->next_hop == src && 
                (current_route->metric + 1) > fib_entry->metric) {
