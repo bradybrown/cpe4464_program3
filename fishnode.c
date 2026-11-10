@@ -170,7 +170,6 @@ int dv_receive(void *l3frame, int len) {
    }
 
    DV_Ad_Header *dv_packet = l3frame;
-   DV_Ad_Header *dv_packet = l3frame;
    if (dv_packet->num_ads == 0) {return 0;}  // No ads => nothing to do
 
    // Check if the len is enough for the size of the packet
