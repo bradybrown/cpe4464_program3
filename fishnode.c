@@ -247,6 +247,15 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
    if (len < sizeof(L3_Header)) {return 0;}
    
    L3_Header *packet = l3frame;
+
+   // TODO: Remove Debug print later
+   fprintf(stderr,
+        "\n\nDEBUG L3 receive: dest=%08X local=%08X protocol=%u l4proto=%u\n",
+        ntohl(packet->dest_l3),
+        ntohl(fish_getaddress()),
+        protocol,
+        packet->l4_protocol);
+
    if (packet->ttl > MAX_TTL) {
       return 0;   // Drop this invalid packet. TTL is too big
    }
@@ -256,6 +265,10 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
 
    if (packet->dest_l3 == fish_getaddress()) {
       // Our node matches destination of packet. Send to l4
+      fprintf(stderr,
+        "\n\nDEBUG L3 receive: destination is local; passing to L4, len=%d\n",
+        l3frame_data_size);  // TODO: Remove later
+      
       fish_l4.fish_l4_receive(l4frame, l3frame_data_size, packet->l4_protocol, packet->src_l3);
       return 0;
    }
