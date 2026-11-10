@@ -408,7 +408,7 @@ void my_timed_event(void*)
    int actual_len = sizeof(DV_Ad_Header) + (dv_cb_data.ads_added * sizeof(DV_Ad_Route));
 
    fish_l2.fish_l2_send(dv_packet, ALL_NEIGHBORS, actual_len, DV_ROUTING_PROTOCOL);
-   // Dont need to free the dv_packet memory since its handled in the ARP/L2 layer
+   smartfree(dv_packet, "fishnode.c", __LINE__);
 
    // Repeat every 30 seconds
    fish_scheduleevent(30000, my_timed_event, NULL);
