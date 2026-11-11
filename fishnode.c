@@ -147,7 +147,7 @@ FiB_Entry *check_fib(fnaddr_t dst) {
    if (current_entry == NULL) {return NULL;}
 
    while (current_entry != NULL) {
-      if (current_entry->dst == dst) {return current_entry;}
+      if (is_entry_cidr_match(current_entry, dst)) {return current_entry;}
 
       current_entry = current_entry->next_entry;
    }
@@ -170,7 +170,29 @@ int dv_receive(void *l3frame, int len) {
    }
 
    DV_Ad_Header *dv_packet = l3frame;
-   if (dv_packet->num_ads == 0) {return 0;}  // No ads => nothing to do
+
+   // If this neighbor not in the fib, add it. Else refresh timer & metric
+   fnaddr_t sender = dv_packet->l3_addr;
+   FiB_Entry *neighbor_route = check_fib(sender);
+
+   if (neighbor_route == NULL) {
+      fish_fwd.add_fwtable_entry(sender, 32, sender, 1, FISH_FWD_TYPE_DV, NULL);
+   }
+   else {
+      if (neighbor_route->type == FISH_FWD_TYPE_DV &&
+            neighbor_route->next_hop == sender &&
+            neighbor_route->prefix_length == 32) {
+         
+         fish_fwd.update_fwtable_metric(neighbor_route, 1);
+      }
+
+      // TODO: Add cancel and reschedule 180 second timer
+   }
+
+   // Don't worry about parsing if there's no routes to parse
+   if (ntohs(dv_packet->num_ads) == 0) {
+      return 0;
+   }
 
    // Check if the len is enough for the size of the packet
    uint32_t num_ad_route_bytes = ntohs(dv_packet->num_ads) * sizeof(DV_Ad_Route);
@@ -184,16 +206,18 @@ int dv_receive(void *l3frame, int len) {
    for (uint32_t i = 0; i < ntohs(dv_packet->num_ads); i++) {
       current_route = (DV_Ad_Route *)(start_ads + (i * sizeof(DV_Ad_Route)));
 
+      uint32_t advertised_metric = ntohl(current_route->metric);
+      uint32_t advertised_netmask = ntohl(current_route->netmask);
       // Per route, check if we need to update FiB
-      if (current_route->metric >= MAX_TTL) {continue;}
+      if (advertised_metric >= MAX_TTL - 1) {continue;}
       
       FiB_Entry *fib_entry = check_fib(current_route->dest);
       if (fib_entry == NULL) {
-         int prefix_length = netmask_to_slash(current_route->netmask);
+         int prefix_length = netmask_to_slash(advertised_netmask);
          fish_fwd.add_fwtable_entry(current_route->dest, 
                                     prefix_length, 
                                     src, 
-                                    current_route->metric + 1, 
+                                    advertised_metric + 1, 
                                     FISH_FWD_TYPE_DV, 
                                     NULL);
          continue;
@@ -212,14 +236,17 @@ int dv_receive(void *l3frame, int len) {
       while (fib_entry != NULL && fib_entry->dst == current_route->dest) {
          if (fib_entry->type == FISH_FWD_TYPE_DV) {
             if (fib_entry->next_hop == src && 
-               (current_route->metric + 1) > fib_entry->metric) {
+               (advertised_metric + 1) != fib_entry->metric) {
                
-               fish_fwd.update_fwtable_metric(fib_entry, current_route->metric + 1);
+               fish_fwd.update_fwtable_metric(fib_entry, advertised_metric + 1);
             }
             else if (fib_entry->next_hop != src &&
-               (current_route->metric + 1) < fib_entry->metric) {
+               (advertised_metric + 1) < fib_entry->metric) {
                
-               fish_fwd.update_fwtable_metric(fib_entry, current_route->metric + 1);
+               // Update the metric and change the fib entry to the new entry
+               fish_fwd.update_fwtable_metric(fib_entry, advertised_metric + 1);
+               fib_entry->next_hop = dv_packet->l3_addr;
+               
             }
 
          }
@@ -235,6 +262,8 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
 {
    // Separate DV ad handling
    if (protocol == DV_ROUTING_PROTOCOL) {
+      // printf("\n\nDEBUG L3 Receive: DV handling\n\n");   // TODO: REmove later
+      
       dv_receive(l3frame, len);
 
       return 0;
@@ -249,12 +278,12 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
    L3_Header *packet = l3frame;
 
    // TODO: Remove Debug print later
-   fprintf(stderr,
-        "\n\nDEBUG L3 receive: dest=%08X local=%08X protocol=%u l4proto=%u\n",
-        ntohl(packet->dest_l3),
-        ntohl(fish_getaddress()),
-        protocol,
-        packet->l4_protocol);
+   // fprintf(stderr,
+   //      "\n\nDEBUG L3 receive: dest=%08X local=%08X protocol=%u l4proto=%u\n",
+   //      ntohl(packet->dest_l3),
+   //      ntohl(fish_getaddress()),
+   //      protocol,
+   //      packet->l4_protocol);
 
    if (packet->ttl > MAX_TTL) {
       return 0;   // Drop this invalid packet. TTL is too big
@@ -265,9 +294,9 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
 
    if (packet->dest_l3 == fish_getaddress()) {
       // Our node matches destination of packet. Send to l4
-      fprintf(stderr,
-        "\n\nDEBUG L3 receive: destination is local; passing to L4, len=%d\n",
-        l3frame_data_size);  // TODO: Remove later
+      // fprintf(stderr,
+      //   "\n\nDEBUG L3 receive: destination is local; passing to L4, len=%d\n",
+      //   l3frame_data_size);  // TODO: Remove later
       
       fish_l4.fish_l4_receive(l4frame, l3frame_data_size, packet->l4_protocol, packet->src_l3);
       return 0;
@@ -397,7 +426,9 @@ int my_fish_l3_forward(void *l3frame, int len)
 
 // Callback to broadcast DV advertisement
 void my_timed_event(void*)
-{
+{  
+   // printf("\n\nDEBUG my timed event: entered function\n");    // TODO: REmove later
+   
    int max_dv_payload = MTU - 17;   // MTU - L2 Header
 
    uint16_t max_ads = (max_dv_payload - sizeof(DV_Ad_Header)) / sizeof(DV_Ad_Route);
@@ -420,11 +451,17 @@ void my_timed_event(void*)
    header->num_ads = htons(dv_cb_data.ads_added);
    int actual_len = sizeof(DV_Ad_Header) + (dv_cb_data.ads_added * sizeof(DV_Ad_Route));
 
+   // printf("\n\nDEBUG my timed event: completed num adds added: %d\n\n", dv_cb_data.ads_added);    // TODO: REmove later
+
    fish_l2.fish_l2_send(dv_packet, ALL_NEIGHBORS, actual_len, DV_ROUTING_PROTOCOL);
    smartfree(dv_packet, "fishnode.c", __LINE__);
 
    // Repeat every 30 seconds
+
+   // printf("\n\nDEBUG my timed event: Scheduled event for another 30 secs\n\n");    // TODO: REmove later
+   
    fish_scheduleevent(30000, my_timed_event, NULL);
+
 }
 
 void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param,
@@ -670,6 +707,7 @@ int main(int argc, char **argv)
 #ifdef DEBUG
 	fish_setdebuglevel(FISH_DEBUG_INTERNAL);
 	// fish_setdebuglevel(FISH_DEBUG_ALL);
+   // fish_setdebuglevel(FISH_DEBUG_ROUTING);
 #else
 	fish_setdebuglevel(FISH_DEBUG_NONE);
 #endif
@@ -703,6 +741,9 @@ int main(int argc, char **argv)
    fish_l3.fish_l3_send = &my_fish_l3_send;
    fish_l3.fish_l3_forward = &my_fish_l3_forward;
    // Set up a callback to broadcast DV advertisement
+
+   // printf("\nSending out first scheduled event\n\n");    // TODO: REmove later
+
    fish_scheduleevent(0, &my_timed_event, NULL);
    // Full functionality
    fish_fwd.add_fwtable_entry = &my_add_fwtable_entry;
@@ -712,7 +753,7 @@ int main(int argc, char **argv)
    fish_fwd.iterate_entries = &my_iterate_entries;
 #endif
 
-#if 1
+#if 0
    /* Enable the built-in neighbor protocol implementation.  This will discover
     * one-hop routes in your fishnet.  The link-state routing protocol requires
     * the neighbor protocol to be working, whereas it is redundant with DV.
