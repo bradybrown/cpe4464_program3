@@ -441,79 +441,263 @@ int my_fish_l3_forward(void *l3frame, int len)
 }
 
 // Callback to broadcast DV advertisement
-void my_timed_event(void*)
-{  
-   // printf("\n\nDEBUG my timed event: entered function\n");    // TODO: REmove later
+// void my_timed_event(void*)
+// {  
    
-   int max_dv_payload = MTU - 17;   // MTU - L2 Header
+//    /*
+//    current_entry = rib head
 
-   uint16_t max_ads = (max_dv_payload - sizeof(DV_Ad_Header)) / sizeof(DV_Ad_Route);
-   int packet_len = sizeof(DV_Ad_Header) + (max_ads * sizeof(DV_Ad_Route));
+//    while current_entry exists:
+//       decide whether it is the selected/best candidate
+//       if not selected:
+//          skip it
+
+//       if current DV packet is full:
+//          send current packet
+//          free it
+//          allocate/initialize new packet
+
+//       add selected route to current packet
+//       advance to next RIB entry
+
+//    after loop:
+//       send the final partly-filled packet
+//       schedule next 30-second timed event
+      
+//    */
+
+//    int max_dv_payload = MTU - 17;   // MTU - L2 Header
+//    uint16_t max_ads = (max_dv_payload - sizeof(DV_Ad_Header)) / sizeof(DV_Ad_Route);
+//    uint16_t num_ads = 0;
+
+//    FiB_Entry *current_entry = fib_table_head;
+//    int packet_len = sizeof(DV_Ad_Header) + (max_ads * sizeof(DV_Ad_Route));
+//    uint8_t *dv_packet = smartalloc(packet_len, "fishnode.c", __LINE__, 0);
+
+//    while (current_entry != NULL) {
+//       FiB_Entry *best_candidate = get_best_candidate(current_entry->dst)
+//    }
 
 
-   uint8_t *dv_packet = smartalloc(packet_len, "fishnode.c", __LINE__, 0);
+
+
+
+
+//    int max_dv_payload = MTU - 17;   // MTU - L2 Header
+
+//    uint16_t max_ads = (max_dv_payload - sizeof(DV_Ad_Header)) / sizeof(DV_Ad_Route);
+   
+
+
+//    uint8_t *dv_packet = smartalloc(packet_len, "fishnode.c", __LINE__, 0);
+//    DV_Ad_Header *header = (DV_Ad_Header *)dv_packet;
+//    header->l3_addr = fish_getaddress();
+//    header->num_ads = 0;
+
+//    // Add to the dv packet with as many entries from FiB as we can fit 
+//    DV_Callback_Data dv_cb_data;
+//    dv_cb_data.packet = dv_packet;
+//    dv_cb_data.max_ads = max_ads;
+//    dv_cb_data.ads_added = 0;
+//    fish_fwd.iterate_entries(dv_ad_cb, &dv_cb_data, FISH_FWD_TYPE_DV);
+   
+//    // After it returns, we should have the num ads added
+//    header->num_ads = htons(dv_cb_data.ads_added);
+//    if (header->num_ads > max_ads)
+
+//    int actual_len = sizeof(DV_Ad_Header) + (dv_cb_data.ads_added * sizeof(DV_Ad_Route));
+
+//    fish_l2.fish_l2_send(dv_packet, ALL_NEIGHBORS, actual_len, DV_ROUTING_PROTOCOL);
+//    smartfree(dv_packet, "fishnode.c", __LINE__);
+
+//    // Repeat every 30 seconds
+
+   
+//    fish_scheduleevent(30000, my_timed_event, NULL);
+
+// }
+
+/*
+   Returns the one best route candidate for a specific destination/prefix.
+   If metrics tie, the first matching entry in the list wins.
+*/
+FiB_Entry *find_best_advertisement_route(fnaddr_t dest, int prefix_length)
+{
+   FiB_Entry *current_entry = fib_table_head;
+   FiB_Entry *best_entry = NULL;
+
+   while (current_entry != NULL) {
+      if (current_entry->dst == dest &&
+          current_entry->prefix_length == prefix_length &&
+          current_entry->type != FISH_FWD_TYPE_BROADCAST &&
+          current_entry->metric < MAX_TTL) {
+
+         if (best_entry == NULL ||
+             current_entry->metric < best_entry->metric) {
+
+            best_entry = current_entry;
+         }
+      }
+
+      current_entry = current_entry->next_entry;
+   }
+
+   return best_entry;
+}
+
+void my_timed_event(void *unused)
+{
+   const int max_dv_payload = MTU - sizeof(L2_Header);
+
+   const uint16_t max_ads =
+      (max_dv_payload - sizeof(DV_Ad_Header)) /
+      sizeof(DV_Ad_Route);
+
+   const int allocation_size =
+      sizeof(DV_Ad_Header) +
+      (max_ads * sizeof(DV_Ad_Route));
+
+   uint8_t *dv_packet =
+      smartalloc(allocation_size, "fishnode.c", __LINE__, 0);
+
    DV_Ad_Header *header = (DV_Ad_Header *)dv_packet;
    header->l3_addr = fish_getaddress();
    header->num_ads = 0;
 
-   // Add to the dv packet with as many entries from FiB as we can fit 
-   DV_Callback_Data dv_cb_data;
-   dv_cb_data.packet = dv_packet;
-   dv_cb_data.max_ads = max_ads;
-   dv_cb_data.ads_added = 0;
-   fish_fwd.iterate_entries(dv_ad_cb, &dv_cb_data, FISH_FWD_TYPE_DV);
-   
-   // After it returns, we should have the num ads added
-   header->num_ads = htons(dv_cb_data.ads_added);
-   int actual_len = sizeof(DV_Ad_Header) + (dv_cb_data.ads_added * sizeof(DV_Ad_Route));
+   uint16_t ads_added = 0;
+   int sent_packet = 0;
 
-   // printf("\n\nDEBUG my timed event: completed num adds added: %d\n\n", dv_cb_data.ads_added);    // TODO: REmove later
+   FiB_Entry *current_entry = fib_table_head;
 
-   fish_l2.fish_l2_send(dv_packet, ALL_NEIGHBORS, actual_len, DV_ROUTING_PROTOCOL);
-   smartfree(dv_packet, "fishnode.c", __LINE__);
+   while (current_entry != NULL) {
+      /*
+         An entry is advertised only if it is the one best route
+         for its destination and prefix length.
+      */
+      FiB_Entry *best_entry =
+         find_best_advertisement_route(current_entry->dst,
+                                       current_entry->prefix_length);
 
-   // Repeat every 30 seconds
+      if (best_entry != current_entry) {
+         current_entry = current_entry->next_entry;
+         continue;
+      }
 
-   // printf("\n\nDEBUG my timed event: Scheduled event for another 30 secs\n\n");    // TODO: REmove later
-   
+      /*
+         Current packet is full. Send it, then begin a new one.
+      */
+      if (ads_added >= max_ads) {
+         send_dv_packet(dv_packet, ads_added);
+         sent_packet = 1;
+
+         dv_packet =
+            smartalloc(allocation_size, "fishnode.c", __LINE__, 0);
+
+         header = (DV_Ad_Header *)dv_packet;
+         header->l3_addr = fish_getaddress();
+         header->num_ads = 0;
+
+         ads_added = 0;
+      }
+
+      add_dv_advertisement(dv_packet, ads_added, best_entry);
+      ads_added++;
+
+      current_entry = current_entry->next_entry;
+   }
+
+   /*
+      Send the final partially filled packet. If there were no routes,
+      send a zero-advertisement packet for DV neighbor discovery.
+   */
+   if (ads_added > 0 || sent_packet == 0) {
+      send_dv_packet(dv_packet, ads_added);
+   } else {
+      smartfree(dv_packet, "fishnode.c", __LINE__);
+   }
+
    fish_scheduleevent(30000, my_timed_event, NULL);
 
+   (void)unused;
 }
 
-/* 
-   This adds the current entry from the FiB to the DV ad packet in the 
-   route section. It follows the structure of the "fwtable_iterator_cb"
+/*
+   Adds one selected route to the current DV packet.
 */
-int dv_ad_cb(void *callback_data, fnaddr_t dest, 
-            int prefix_len, fnaddr_t next_hop, int metric, void *entry_data) {
-   DV_Callback_Data *dv_build_context = callback_data;
+void add_dv_advertisement(uint8_t *dv_packet, uint16_t ad_index,
+                          FiB_Entry *route)
+{
+   DV_Ad_Route *routes =
+      (DV_Ad_Route *)(dv_packet + sizeof(DV_Ad_Header));
 
-   // Even if there are more entries in the FiB, we won't send them all since the MTU 
-   if (dv_build_context->ads_added >= dv_build_context->max_ads) {
-      return 0;
+   DV_Ad_Route *current_route = &routes[ad_index];
+
+   current_route->dest = route->dst;
+   current_route->metric = htonl(route->metric);
+
+   uint32_t host_mask = 0;
+   if (route->prefix_length != 0) {
+      host_mask = 0xFFFFFFFFu << (32 - route->prefix_length);
    }
 
-   // Ptr to start of the routes in the DV Packet
-   DV_Ad_Route *routes = (DV_Ad_Route *)(dv_build_context->packet + sizeof(DV_Ad_Header));
+   current_route->netmask = htonl(host_mask);
+}
 
-   // Gets the index for the route we are adding from FiB to this DV Packet
-   DV_Ad_Route *current_route = &routes[dv_build_context->ads_added];
-   current_route->dest = dest;
-   current_route->metric = htonl(metric);
+
+/*
+   Finalizes and sends one DV packet, then releases the caller-owned buffer.
+*/
+void send_dv_packet(uint8_t *dv_packet, uint16_t ads_added)
+{
+   DV_Ad_Header *header = (DV_Ad_Header *)dv_packet;
+
+   header->num_ads = htons(ads_added);
+
+   int packet_length =
+      sizeof(DV_Ad_Header) + (ads_added * sizeof(DV_Ad_Route));
+
+   fish_l2.fish_l2_send(dv_packet,
+                        ALL_NEIGHBORS,
+                        packet_length,
+                        DV_ROUTING_PROTOCOL);
+
+   smartfree(dv_packet, "fishnode.c", __LINE__);
+}
+
+// /* 
+//    This adds the current entry from the FiB to the DV ad packet in the 
+//    route section. It follows the structure of the "fwtable_iterator_cb"
+// */
+// int dv_ad_cb(void *callback_data, fnaddr_t dest, 
+//             int prefix_len, fnaddr_t next_hop, int metric, void *entry_data) {
+//    DV_Callback_Data *dv_build_context = callback_data;
+
+//    // If there are more entries in FiB than we fit in the DV ad, we return 1
+//    if (dv_build_context->ads_added >= dv_build_context->max_ads) {
+//       return 1;
+//    }
+
+//    // Ptr to start of the routes in the DV Packet
+//    DV_Ad_Route *routes = (DV_Ad_Route *)(dv_build_context->packet + sizeof(DV_Ad_Header));
+
+//    // Gets the index for the route we are adding from FiB to this DV Packet
+//    DV_Ad_Route *current_route = &routes[dv_build_context->ads_added];
+//    current_route->dest = dest;
+//    current_route->metric = htonl(metric);
 
    
-   uint32_t host_mask = 0;
-   if (prefix_len != 0) {
-      host_mask = 0xFFFFFFFFu << (32 - prefix_len);
-   }
-   current_route->netmask = htonl(host_mask);
+//    uint32_t host_mask = 0;
+//    if (prefix_len != 0) {
+//       host_mask = 0xFFFFFFFFu << (32 - prefix_len);
+//    }
+//    current_route->netmask = htonl(host_mask);
 
-   dv_build_context->ads_added++;
+//    dv_build_context->ads_added++;
 
-   (void) next_hop;
-   (void) entry_data;
-   return 0; 
-}
+//    (void) next_hop;
+//    (void) entry_data;
+//    return 0; 
+// }
 
 void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param,
             char type) 

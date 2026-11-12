@@ -91,9 +91,20 @@ int netmask_to_slash(uint32_t netmask);
 
 FiB_Entry *find_dv_candidate(fnaddr_t dest, uint32_t prefix_len, fnaddr_t next_hop);    // Gets the FiB entry ptr based on DV and l3 addr
 void dv_route_expired(void *arg);   // Timeout handler function
-int dv_ad_cb(void *callback_data, fnaddr_t dest, int prefix_len, 
-            fnaddr_t next_hop, int metric, void *entry_data);
+// int dv_ad_cb(void *callback_data, fnaddr_t dest, int prefix_len, 
+//             fnaddr_t next_hop, int metric, void *entry_data);
 void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param,
             char type);
+
+FiB_Entry *find_best_advertisement_route(fnaddr_t dest,
+                                         int prefix_length);
+
+void add_dv_advertisement(uint8_t *dv_packet,
+                          uint16_t ad_index,
+                          FiB_Entry *route);
+
+void send_dv_packet(uint8_t *dv_packet,
+                    uint16_t ads_added);
+
 
 #endif
