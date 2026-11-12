@@ -11,7 +11,7 @@
 #define NETWORK_UNREACHABLE 2
 #define HOST_UNREACHABLE    3
 
-#define FIB_ENTRY_TIMEOUT (180 * 1000)
+#define FIB_ENTRY_TIMEOUT 180000U
 
 typedef struct __attribute__((packed)) L2_Header {
     fn_l2addr_t dest_l2;
@@ -96,15 +96,9 @@ void dv_route_expired(void *arg);   // Timeout handler function
 void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param,
             char type);
 
-FiB_Entry *find_best_advertisement_route(fnaddr_t dest,
-                                         int prefix_length);
-
-void add_dv_advertisement(uint8_t *dv_packet,
-                          uint16_t ad_index,
-                          FiB_Entry *route);
-
-void send_dv_packet(uint8_t *dv_packet,
-                    uint16_t ads_added);
+FiB_Entry *find_best_advertisement_route(fnaddr_t dest, int prefix_length);
+void add_dv_advertisement(uint8_t *dv_packet, uint16_t ad_index, FiB_Entry *route);
+void send_dv_packet(uint8_t *dv_packet, uint16_t ads_added);
 
 
 #endif
