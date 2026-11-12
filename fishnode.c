@@ -164,6 +164,26 @@ int netmask_to_slash(uint32_t netmask) {
    return prefix_len;
 }
 
+FiB_Entry *find_dv_candidate(fnaddr_t dest, uint32_t prefix_len, fnaddr_t next_hop) {
+   FiB_Entry *current_entry = fib_table_head;
+
+   if (current_entry == NULL) {return NULL;}
+
+   while (current_entry != NULL) {
+      if (current_entry->dst == dest &&
+          current_entry->prefix_length == prefix_len &&
+          current_entry->next_hop == next_hop &&
+          current_entry->type == FISH_FWD_TYPE_DV) {
+
+         return current_entry;
+      }
+
+      current_entry = current_entry->next_entry;
+   }
+
+   return NULL;
+}
+
 int dv_receive(void *l3frame, int len) {
    if (len < (int)sizeof(DV_Ad_Header)) {
       return 0;
@@ -173,7 +193,7 @@ int dv_receive(void *l3frame, int len) {
 
    // If this neighbor not in the fib, add it. Else refresh timer & metric
    fnaddr_t sender = dv_packet->l3_addr;
-   FiB_Entry *neighbor_route = check_fib(sender);
+   FiB_Entry *neighbor_route = find_dv_candidate(sender, 32, sender);
 
    if (neighbor_route == NULL) {
       fish_fwd.add_fwtable_entry(sender, 32, sender, 1, FISH_FWD_TYPE_DV, NULL);
@@ -184,9 +204,15 @@ int dv_receive(void *l3frame, int len) {
             neighbor_route->prefix_length == 32) {
          
          fish_fwd.update_fwtable_metric(neighbor_route, 1);
+         
+         if (neighbor_route->timeout_handle != 0)
+            fish_cancelevent(neighbor_route->timeout_handle);
+
+         neighbor_route->timeout_handle = fish_scheduleevent(FIB_ENTRY_TIMEOUT, 
+                                                             dv_route_expired,
+                                                             neighbor_route);  
       }
 
-      // TODO: Add cancel and reschedule 180 second timer
    }
 
    // Don't worry about parsing if there's no routes to parse
@@ -208,16 +234,19 @@ int dv_receive(void *l3frame, int len) {
 
       uint32_t advertised_metric = ntohl(current_route->metric);
       uint32_t advertised_netmask = ntohl(current_route->netmask);
+
       // Per route, check if we need to update FiB
       if (advertised_metric >= MAX_TTL - 1) {continue;}
       
-      FiB_Entry *fib_entry = check_fib(current_route->dest);
-      if (fib_entry == NULL) {
-         int prefix_length = netmask_to_slash(advertised_netmask);
+      int prefix_length = netmask_to_slash(advertised_netmask);
+      int total_metric = advertised_metric + 1;
+
+      FiB_Entry *fib_entry = find_dv_candidate(current_route->dest, prefix_length, src);
+      if (fib_entry == NULL) {   // No exact DV candidate match, add one to the table
          fish_fwd.add_fwtable_entry(current_route->dest, 
                                     prefix_length, 
                                     src, 
-                                    advertised_metric + 1, 
+                                    total_metric, 
                                     FISH_FWD_TYPE_DV, 
                                     NULL);
          continue;
@@ -225,33 +254,33 @@ int dv_receive(void *l3frame, int len) {
 
       /* When checking if i should replace an entry, I need to check:
 
-      - Next hop is the same: if new is higher, REPLACE (something happened in 
-         the network such that it now takes longer to get to dest). Else, 
-         DONT change current entry  
-      
-      - NH is diff: If new is lower, then this is an alternative route that is 
-         better than current (REPLACE old entry). Else, DONT change since our
-         old entry is a better option.
-      */       
-      while (fib_entry != NULL && fib_entry->dst == current_route->dest) {
-         if (fib_entry->type == FISH_FWD_TYPE_DV) {
-            if (fib_entry->next_hop == src && 
-               (advertised_metric + 1) != fib_entry->metric) {
-               
-               fish_fwd.update_fwtable_metric(fib_entry, advertised_metric + 1);
-            }
-            else if (fib_entry->next_hop != src &&
-               (advertised_metric + 1) < fib_entry->metric) {
-               
-               // Update the metric and change the fib entry to the new entry
-               fish_fwd.update_fwtable_metric(fib_entry, advertised_metric + 1);
-               fib_entry->next_hop = dv_packet->l3_addr;
-               
-            }
+      - Same next hop:
+         This is the same DV candidate.
+         Always reset its timeout.
+         If the metric changed—higher or lower—update that candidate’s metric.
 
-         }
-         fib_entry = fib_entry->next_entry;
+      - Different next hop:
+         This is a different DV candidate.
+         Add it and give it its own timeout, whether its metric is lower or higher.
+         Do not modify the old candidate.
+
+         If the new candidate has a lower metric, forwarding selection now chooses it.
+         If it has a higher metric, it remains stored as a backup.
+      */       
+
+      /*
+         Since find_dv_candidate() includes src/next-hop in its match,
+         reaching this point means this is the same-next-hop candidate.
+      */
+      if (fib_entry->metric != total_metric) {
+         fish_fwd.update_fwtable_metric(fib_entry, total_metric);
       }
+
+      // Refresh the timeout even if the metric didn't change
+      if (fib_entry->timeout_handle != 0) {
+         fish_cancelevent(fib_entry->timeout_handle);
+      }
+      fib_entry->timeout_handle = fish_scheduleevent(FIB_ENTRY_TIMEOUT, dv_route_expired, fib_entry);
 
    }
 
@@ -262,28 +291,18 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
 {
    // Separate DV ad handling
    if (protocol == DV_ROUTING_PROTOCOL) {
-      // printf("\n\nDEBUG L3 Receive: DV handling\n\n");   // TODO: REmove later
-      
       dv_receive(l3frame, len);
-
       return 0;
    }
 
    
    // Handle regular L3 Packet
    
-   // Drop packet with invalid packet length
-   if (len < sizeof(L3_Header)) {return 0;}
+   
+   if (len < sizeof(L3_Header)) {return 0;} // Drop packet with invalid packet length
    
    L3_Header *packet = l3frame;
 
-   // TODO: Remove Debug print later
-   // fprintf(stderr,
-   //      "\n\nDEBUG L3 receive: dest=%08X local=%08X protocol=%u l4proto=%u\n",
-   //      ntohl(packet->dest_l3),
-   //      ntohl(fish_getaddress()),
-   //      protocol,
-   //      packet->l4_protocol);
 
    if (packet->ttl > MAX_TTL) {
       return 0;   // Drop this invalid packet. TTL is too big
@@ -294,9 +313,6 @@ int my_fishnode_l3_receive(void *l3frame, int len, uint8_t protocol)
 
    if (packet->dest_l3 == fish_getaddress()) {
       // Our node matches destination of packet. Send to l4
-      // fprintf(stderr,
-      //   "\n\nDEBUG L3 receive: destination is local; passing to L4, len=%d\n",
-      //   l3frame_data_size);  // TODO: Remove later
       
       fish_l4.fish_l4_receive(l4frame, l3frame_data_size, packet->l4_protocol, packet->src_l3);
       return 0;
@@ -464,25 +480,6 @@ void my_timed_event(void*)
 
 }
 
-void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param,
-            char type) 
-{
-   if (fib_table_head == NULL) {
-      return;
-   }
-
-   FiB_Entry *current_entry = fib_table_head;
-   while (current_entry != NULL) {
-      if (current_entry->type == type) {     
-         callback(callback_param, current_entry->dst, 
-            current_entry->prefix_length, current_entry->next_hop,
-            current_entry->metric, current_entry->user_data);
-      }
-
-      current_entry = current_entry->next_entry;
-   }
-}
-
 /* 
    This adds the current entry from the FiB to the DV ad packet in the 
    route section. It follows the structure of the "fwtable_iterator_cb"
@@ -518,6 +515,35 @@ int dv_ad_cb(void *callback_data, fnaddr_t dest,
    return 0; 
 }
 
+void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param,
+            char type) 
+{
+   if (fib_table_head == NULL) {
+      return;
+   }
+
+   FiB_Entry *current_entry = fib_table_head;
+   while (current_entry != NULL) {
+      if (current_entry->type == type) {     
+         callback(callback_param, current_entry->dst, 
+            current_entry->prefix_length, current_entry->next_hop,
+            current_entry->metric, current_entry->user_data);
+      }
+
+      current_entry = current_entry->next_entry;
+   }
+}
+
+void dv_route_expired(void *arg)
+{
+    FiB_Entry *route = (FiB_Entry *)arg;
+
+    /* The event already fired, so it is no longer pending. */
+    route->timeout_handle = 0;
+
+    fish_fwd.remove_fwtable_entry(route);
+}
+
 // Full functionality
 void* my_add_fwtable_entry(fnaddr_t dst, int prefix_length, fnaddr_t next_hop,
                    int metric, char type, void *user_data)
@@ -538,6 +564,14 @@ void* my_add_fwtable_entry(fnaddr_t dst, int prefix_length, fnaddr_t next_hop,
    new_entry->type = type;
    new_entry->user_data = user_data;
    new_entry->next_entry = NULL;
+
+   if (type == FISH_FWD_TYPE_DV) {
+      new_entry->timeout_handle = fish_scheduleevent(FIB_ENTRY_TIMEOUT, dv_route_expired, new_entry);
+   }
+   else {
+      new_entry->timeout_handle = 0;
+   }
+   
 
    // Group routes with same destination. Otherwise, append at end
    if (fib_table_head == NULL) {
@@ -577,6 +611,10 @@ void* my_remove_fwtable_entry(void *route_key)
       fib_table_head = route_entry->next_entry;
       
       void *user_data = route_entry->user_data;
+
+      if (route_entry->timeout_handle != 0) 
+         fish_cancelevent(route_entry->timeout_handle);
+
       smartfree(route_entry, "fishnode.c", __LINE__);
       return user_data;
    }
@@ -588,6 +626,10 @@ void* my_remove_fwtable_entry(void *route_key)
          current_entry->next_entry = tmp;
          
          void *user_data = route_entry->user_data;
+
+         if (route_entry->timeout_handle != 0) 
+            fish_cancelevent(route_entry->timeout_handle);
+
          smartfree(route_entry, "fishnode.c", __LINE__);
          return user_data;
       }
@@ -624,7 +666,6 @@ int is_entry_cidr_match(FiB_Entry *entry, fnaddr_t addr) {
 
    return ((host_addr & cidr_mask) == (host_entryDst & cidr_mask));
 }
-
 
 fnaddr_t my_longest_prefix_match(fnaddr_t addr)
 {
@@ -794,7 +835,7 @@ int main(int argc, char **argv)
 
    fishnet_cleanup();
 
-   
+
    // Cleanup Broadcast History list
    if (broadcast_history_head != NULL) {
       Broadcast_History_Entry *current_entry = broadcast_history_head->next_entry;
@@ -809,17 +850,22 @@ int main(int argc, char **argv)
    }
 
 
-   // Cleanup FiB
+   // Cleanup FiB & cancel the Timers
    if (fib_table_head != NULL) {
-      FiB_Entry *current_entry = fib_table_head->next_entry;
-      smartfree(fib_table_head, "fishnode.c", __LINE__);
-      fib_table_head = NULL;
-
+      FiB_Entry *current_entry = fib_table_head;
+      
       while(current_entry != NULL) {
          FiB_Entry *next_entry = current_entry->next_entry;
+         
+         if (current_entry->type == FISH_FWD_TYPE_DV &&
+             current_entry->timeout_handle != 0)
+            fish_cancelevent(current_entry->timeout_handle);
+         
          smartfree(current_entry, "fishnode.c", __LINE__);
          current_entry = next_entry;
       }
+
+      fib_table_head = NULL;
    }
 
 
