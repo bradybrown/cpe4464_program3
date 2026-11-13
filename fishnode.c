@@ -447,6 +447,9 @@ int my_fish_l3_forward(void *l3frame, int len)
 // Callback to broadcast DV advertisement
 void my_timed_event(void*)
 {  
+   // Repeat this function every 30 seconds
+   fish_scheduleevent(30000, my_timed_event, NULL);
+
    
    /*
    Allocate a packet for the max size DV ad & dynamicallly track number of ads
@@ -516,9 +519,6 @@ void my_timed_event(void*)
    else {
       smartfree(dv_packet, "fishnode.c", __LINE__);
    }
-
-   // Repeat this function every 30 seconds
-   fish_scheduleevent(30000, my_timed_event, NULL);
 }
 
 /*
@@ -855,9 +855,6 @@ int main(int argc, char **argv)
    fish_l3.fish_l3_send = &my_fish_l3_send;
    fish_l3.fish_l3_forward = &my_fish_l3_forward;
    // Set up a callback to broadcast DV advertisement
-
-   // printf("\nSending out first scheduled event\n\n");    // TODO: REmove later
-
    fish_scheduleevent(0, &my_timed_event, NULL);
    // Full functionality
    fish_fwd.add_fwtable_entry = &my_add_fwtable_entry;

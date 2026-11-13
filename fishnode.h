@@ -11,7 +11,7 @@
 #define NETWORK_UNREACHABLE 2
 #define HOST_UNREACHABLE    3
 
-#define FIB_ENTRY_TIMEOUT 180000U
+#define FIB_ENTRY_TIMEOUT 181000U
 
 typedef struct __attribute__((packed)) L2_Header {
     fn_l2addr_t dest_l2;
